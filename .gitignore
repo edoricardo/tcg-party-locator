@@ -18,5 +18,9 @@
 # Environment
 .env
 
+# Local data and database files
+/data/
+*.db
+
 # macOS
 .DS_Store

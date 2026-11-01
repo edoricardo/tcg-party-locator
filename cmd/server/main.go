@@ -1,7 +1,25 @@
 package main
 
-import "fmt"
+import (
+	"log"
+	"net/http"
+	"os"
+
+	"github.com/edoricardo/tcg-party-locator/internal/app"
+)
 
 func main() {
-	fmt.Println("Welcome to TCG Party Locator!")
+	store := app.NewEventStore()
+	handler := app.NewHandler(store)
+
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	addr := ":" + port
+	log.Printf("Starting TCG Party Locator on %s", addr)
+	if err := http.ListenAndServe(addr, handler); err != nil {
+		log.Fatalf("server failed: %v", err)
+	}
 }

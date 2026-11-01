@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -67,34 +68,25 @@ func normalizeEvent(evt Event) Event {
 	if evt.ID == "" {
 		evt.ID = fmt.Sprintf("evt-%d", time.Now().UnixNano())
 	}
-	if evt.Name == "" {
-		evt.Name = "Untitled Event"
+
+	cleaned := Event{
+		ID:      strings.TrimSpace(evt.ID),
+		Name:    strings.TrimSpace(evt.Name),
+		Game:    strings.TrimSpace(evt.Game),
+		City:    strings.TrimSpace(evt.City),
+		Venue:   strings.TrimSpace(evt.Venue),
+		Date:    strings.TrimSpace(evt.Date),
+		Format:  strings.TrimSpace(evt.Format),
+		Players: evt.Players,
+		Spots:   evt.Spots,
+		Host:    strings.TrimSpace(evt.Host),
+		Address: strings.TrimSpace(evt.Address),
+		Notes:   strings.TrimSpace(evt.Notes),
 	}
-	if evt.City == "" {
-		evt.City = "Unknown"
+	if cleaned.ID == "" {
+		cleaned.ID = evt.ID
 	}
-	if evt.Date == "" {
-		evt.Date = "2026-01-01T18:00:00Z"
-	}
-	if evt.Game == "" {
-		evt.Game = "General TCG"
-	}
-	if evt.Venue == "" {
-		evt.Venue = "TBD"
-	}
-	if evt.Format == "" {
-		evt.Format = "Casual"
-	}
-	if evt.Host == "" {
-		evt.Host = "Host TBD"
-	}
-	if evt.Players < 0 {
-		evt.Players = 0
-	}
-	if evt.Spots < 0 {
-		evt.Spots = 0
-	}
-	return evt
+	return cleaned
 }
 
 // EventStore holds the collection of TCG events in SQLite.
@@ -208,7 +200,6 @@ func (s *EventStore) List(city, game, query string) []Event {
 		queryBuilder += " AND (lower(name) LIKE ? OR lower(city) LIKE ? OR lower(game) LIKE ? OR lower(venue) LIKE ? OR lower(format) LIKE ?)"
 		args = append(args, term, term, term, term, term)
 	}
-	queryBuilder += " ORDER BY date ASC"
 
 	rows, err := s.db.Query(queryBuilder, args...)
 	if err != nil {
@@ -224,7 +215,33 @@ func (s *EventStore) List(city, game, query string) []Event {
 		}
 		results = append(results, event)
 	}
+	orderEventsByDate(results)
 	return results
+}
+
+func orderEventsByDate(events []Event) {
+	sort.SliceStable(events, func(i, j int) bool {
+		iTime, iErr := parseEventTime(events[i].Date)
+		jTime, jErr := parseEventTime(events[j].Date)
+		switch {
+		case iErr == nil && jErr == nil:
+			return iTime.Before(jTime)
+		case iErr == nil:
+			return true
+		case jErr == nil:
+			return false
+		default:
+			return events[i].Date < events[j].Date
+		}
+	})
+}
+
+func parseEventTime(value string) (time.Time, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return time.Time{}, errors.New("empty date")
+	}
+	return time.Parse(time.RFC3339, trimmed)
 }
 
 func (s *EventStore) Get(id string) (Event, bool) {
@@ -256,6 +273,9 @@ func (s *EventStore) Add(evt Event) (Event, error) {
 	defer s.mu.Unlock()
 
 	evt = normalizeEvent(evt)
+	if err := evt.Validate(); err != nil {
+		return Event{}, err
+	}
 
 	_, err := s.db.Exec(`
 		INSERT INTO events (id, name, game, city, venue, date, format, players, spots, host, address, notes)

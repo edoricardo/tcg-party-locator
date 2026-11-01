@@ -37,6 +37,28 @@ func TestListEvents(t *testing.T) {
 	}
 }
 
+func TestListEventsSortsByActualTime(t *testing.T) {
+	store := newTestStore(t)
+
+	events := []Event{
+		{ID: "evt-9001", Name: "Earlier in UTC", Game: "Commander", City: "Seattle", Venue: "Northside", Date: "2026-11-08T11:00:00Z", Format: "Casual", Players: 8, Spots: 12, Host: "A"},
+		{ID: "evt-9002", Name: "Later by local offset", Game: "Commander", City: "Seattle", Venue: "Southside", Date: "2026-11-08T05:00:00-07:00", Format: "Casual", Players: 8, Spots: 12, Host: "B"},
+	}
+	for _, event := range events {
+		if _, err := store.Add(event); err != nil {
+			t.Fatalf("failed to add test event: %v", err)
+		}
+	}
+
+	results := store.List("Seattle", "Commander", "")
+	if len(results) < 2 {
+		t.Fatalf("expected at least 2 Seattle Commander events, got %d", len(results))
+	}
+	if results[0].Name != "Earlier in UTC" {
+		t.Fatalf("expected earliest time first, got %+v", results[:2])
+	}
+}
+
 func TestCreateEvent(t *testing.T) {
 	store := newTestStore(t)
 	handler := NewHandler(store)
@@ -88,6 +110,25 @@ func TestValidateEventRejectsInvalidPayload(t *testing.T) {
 
 	if err := event.Validate(); err == nil {
 		t.Fatal("expected invalid event to fail validation")
+	}
+}
+
+func TestStoreAddRejectsInvalidEvent(t *testing.T) {
+	store := newTestStore(t)
+
+	_, err := store.Add(Event{
+		Name:    "",
+		Game:    "Commander",
+		City:    "Seattle",
+		Venue:   "The Dragon's Den",
+		Date:    "2026-11-08T18:30:00Z",
+		Format:  "Casual Draft",
+		Players: 8,
+		Spots:   12,
+		Host:    "Avery",
+	})
+	if err == nil {
+		t.Fatal("expected store.Add to reject invalid event")
 	}
 }
 

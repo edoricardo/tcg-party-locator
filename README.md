@@ -2,7 +2,7 @@
 
 TCG Party Locator is a Go service for finding local tabletop gaming groups and events.
 
-## Features
+## Current status
 
 - Search and filter upcoming TCG events by city, game, and free-text query
 - View individual event details by ID

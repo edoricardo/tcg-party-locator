@@ -65,12 +65,14 @@ func (e Event) Validate() error {
 }
 
 func normalizeEvent(evt Event) Event {
-	if evt.ID == "" {
+	if strings.TrimSpace(evt.ID) == "" {
 		evt.ID = fmt.Sprintf("evt-%d", time.Now().UnixNano())
+	} else {
+		evt.ID = strings.TrimSpace(evt.ID)
 	}
 
 	cleaned := Event{
-		ID:      strings.TrimSpace(evt.ID),
+		ID:      evt.ID,
 		Name:    strings.TrimSpace(evt.Name),
 		Game:    strings.TrimSpace(evt.Game),
 		City:    strings.TrimSpace(evt.City),
@@ -82,9 +84,6 @@ func normalizeEvent(evt Event) Event {
 		Host:    strings.TrimSpace(evt.Host),
 		Address: strings.TrimSpace(evt.Address),
 		Notes:   strings.TrimSpace(evt.Notes),
-	}
-	if cleaned.ID == "" {
-		cleaned.ID = evt.ID
 	}
 	return cleaned
 }
@@ -215,14 +214,10 @@ func (s *EventStore) List(city, game, query string) []Event {
 		}
 		results = append(results, event)
 	}
-	orderEventsByDate(results)
-	return results
-}
 
-func orderEventsByDate(events []Event) {
-	sort.SliceStable(events, func(i, j int) bool {
-		iTime, iErr := parseEventTime(events[i].Date)
-		jTime, jErr := parseEventTime(events[j].Date)
+	sort.SliceStable(results, func(i, j int) bool {
+		iTime, iErr := parseEventTime(results[i].Date)
+		jTime, jErr := parseEventTime(results[j].Date)
 		switch {
 		case iErr == nil && jErr == nil:
 			return iTime.Before(jTime)
@@ -231,9 +226,10 @@ func orderEventsByDate(events []Event) {
 		case jErr == nil:
 			return false
 		default:
-			return events[i].Date < events[j].Date
+			return results[i].Date < results[j].Date
 		}
 	})
+	return results
 }
 
 func parseEventTime(value string) (time.Time, error) {
@@ -341,6 +337,7 @@ func (h *Handler) events(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid event payload"})
 			return
 		}
+		event = normalizeEvent(event)
 		if err := event.Validate(); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 			return

@@ -132,6 +132,16 @@ func TestStoreAddRejectsInvalidEvent(t *testing.T) {
 	}
 }
 
+func TestNormalizeWhitespaceIDGeneratesFreshID(t *testing.T) {
+	evt := normalizeEvent(Event{ID: "   ", Name: "Commander Night", Game: "Commander", City: "Seattle", Venue: "The Dragon's Den", Date: "2026-11-08T18:30:00Z", Format: "Casual Draft", Players: 8, Spots: 12, Host: "Avery"})
+	if evt.ID == "" || strings.TrimSpace(evt.ID) == "" {
+		t.Fatalf("expected generated non-empty event id, got %q", evt.ID)
+	}
+	if evt.ID == "   " {
+		t.Fatalf("expected whitespace-only id to be replaced, got %q", evt.ID)
+	}
+}
+
 func TestCreateEventRejectsBadPayload(t *testing.T) {
 	store := newTestStore(t)
 	handler := NewHandler(store)

@@ -45,22 +45,22 @@
 - Produces `Session{User User, CSRFToken string}`, `(*EventStore).CreateSession(userID string, expiresAt time.Time) (sessionToken, csrfToken string, err error)`, `(*EventStore).ResolveSession(sessionToken string) (Session, bool)`, and `(*EventStore).DeleteSession(sessionToken string) error`.
 - Produces handler helpers to set, read, and clear the `tcg_session` cookie. Store only a hash of the random session token; cookies are `HttpOnly`, `SameSite=Lax`, path `/`, expire after seven days, and set `Secure` on TLS requests.
 - Authenticated state-changing requests validate a per-session CSRF token from a form field or `X-CSRF-Token` header.
-- `POST /register` creates an account and establishes a session; `POST /login` establishes a session; `POST /logout` invalidates it. Invalid login returns a generic error. Email is normalized case-insensitively and unique. Passwords are stored with bcrypt hashes, never plaintext. No email verification or password-reset flow is in v1.
+- `POST /register` creates an account and establishes a session; `POST /login` establishes a session; `POST /logout` invalidates it. Invalid login returns a generic error. Email is normalized case-insensitively and unique. Passwords must be at least 12 characters and no more than bcrypt's 72-byte limit, and are stored with bcrypt hashes, never plaintext. No email verification or password-reset flow is in v1.
+- `GET /api/account` returns the authenticated account or `401` when the session is missing or expired; the browser can use it to identify its signed-in account.
 
-- [ ] **Step 1: Write failing tests** in `internal/app/app_test.go` for account registration and login, case-insensitive duplicate email, invalid login, session cookie attributes, logout invalidation, and expired-session rejection.
+- [ ] **Step 1: Write failing tests** in `internal/app/app_test.go` for account registration and login, rejection of short passwords, case-insensitive duplicate email, invalid login, session cookie attributes, logout invalidation, expired-session rejection, and migration from the current `events` schema with preservation of its seeded event.
 - [ ] **Step 2: Run the focused tests to verify they fail**
 
-Run: `go test ./internal/app -run 'Test(Register|Login|Session|Expired)' -count=1`
-Expected: FAIL because account storage and session routes do not exist.
+Run: `go test ./internal/app -run 'Test(Register|Login|Logout|Session|Expired|ExistingDatabase)' -count=1`
+Expected: FAIL because account/session routes and the new schema do not exist.
 
 - [ ] **Step 3: Implement account/session storage and handlers** in `internal/app/accounts.go`; add bcrypt and create `users` and `sessions` tables in `EventStore.ensureSchema`.
-- [ ] **Step 4: Add a migration test** that opens a database created with the current `events` schema and verifies its seeded event remains readable after the new schema is installed.
-- [ ] **Step 5: Run focused account and migration tests**
+- [ ] **Step 4: Run focused account and migration tests**
 
-Run: `go test ./internal/app -run 'Test(Register|Login|Session|Expired|ExistingDatabase)' -count=1`
+Run: `go test ./internal/app -run 'Test(Register|Login|Logout|Session|Expired|ExistingDatabase)' -count=1`
 Expected: PASS.
 
-- [ ] **Step 6: Commit the account/session slice**
+- [ ] **Step 5: Commit the account/session slice**
 
 ```bash
 git add go.mod go.sum internal/app/app.go internal/app/accounts.go internal/app/app_test.go

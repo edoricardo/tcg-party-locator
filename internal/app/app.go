@@ -148,6 +148,18 @@ func (s *EventStore) ensureSchema() error {
 			host TEXT NOT NULL,
 			address TEXT,
 			notes TEXT
+		);
+		CREATE TABLE IF NOT EXISTS users (
+			id TEXT PRIMARY KEY,
+			email TEXT NOT NULL UNIQUE,
+			password_hash TEXT NOT NULL,
+			created_at TEXT NOT NULL
+		);
+		CREATE TABLE IF NOT EXISTS sessions (
+			token_hash TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL REFERENCES users(id),
+			csrf_token TEXT NOT NULL,
+			expires_at TEXT NOT NULL
 		);`)
 	return err
 }
@@ -295,6 +307,10 @@ func NewHandler(store *EventStore) *Handler {
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", h.health)
+	mux.HandleFunc("/register", h.register)
+	mux.HandleFunc("/login", h.login)
+	mux.HandleFunc("/logout", h.logout)
+	mux.HandleFunc("/api/account", h.currentAccount)
 	mux.HandleFunc("/events", h.events)
 	mux.HandleFunc("/events/", h.eventDetail)
 	mux.HandleFunc("/", h.home)

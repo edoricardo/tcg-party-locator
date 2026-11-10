@@ -1,0 +1,43 @@
+{{define "content"}}
+<main class="page-shell narrow-shell">
+  <section class="form-panel">
+    <p class="eyebrow">HOST AN EVENT</p>
+    <h1>{{.Title}}</h1>
+    {{if .Error}}<p class="form-error" role="alert">{{.Error}}</p>{{end}}
+    <form class="stacked-form" method="post" action="{{.FormAction}}">
+      <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
+      <label>Event name
+        <input name="name" value="{{.Event.Name}}" required>
+      </label>
+      <label>Game
+        <input name="game" value="{{.Event.Game}}" required>
+      </label>
+      <label>City or region
+        <input name="city" value="{{.Event.City}}" required>
+      </label>
+      <label>Venue
+        <input name="venue" value="{{.Event.Venue}}" required>
+      </label>
+      <label>Date and time (RFC3339)
+        <input name="date" value="{{.Event.Date}}" placeholder="2030-01-02T18:00:00Z" required>
+      </label>
+      <label>Format
+        <input name="format" value="{{.Event.Format}}" placeholder="Casual, competitive, or tournament format" required>
+      </label>
+      <label>Total capacity
+        <input type="number" name="capacity" min="1" value="{{.Capacity}}" required>
+      </label>
+      <label>Host display name
+        <input name="host" value="{{.Event.Host}}" required>
+      </label>
+      <label>Address (optional)
+        <input name="address" value="{{.Event.Address}}">
+      </label>
+      <label>Notes (optional)
+        <textarea name="notes" rows="4">{{.Event.Notes}}</textarea>
+      </label>
+      <button class="button button-primary" type="submit">{{.SubmitText}}</button>
+    </form>
+  </section>
+</main>
+{{end}}

@@ -1,0 +1,52 @@
+{{define "content"}}
+<main class="page-shell narrow-shell">
+  <a class="back-link" href="/">← All events</a>
+  <article class="event-detail">
+    {{if eq .Event.Status "cancelled"}}
+      <p class="status-banner" role="status">This event has been cancelled.</p>
+    {{end}}
+    <p class="eyebrow">{{.Event.Game}} · {{.Event.Format}}</p>
+    <h1>{{.Event.Name}}</h1>
+    <p class="event-place">{{.Event.City}} · {{.Event.Venue}}</p>
+    <dl class="event-facts">
+      <div><dt>When</dt><dd><time datetime="{{.Event.Date}}">{{.Event.Date}}</time></dd></div>
+      <div><dt>Host</dt><dd>{{.Event.Host}}</dd></div>
+      <div><dt>Attendance</dt><dd>{{.Event.Players}} playing · {{.Event.Spots}} spots left</dd></div>
+      {{if .Event.Address}}<div><dt>Address</dt><dd>{{.Event.Address}}</dd></div>{{end}}
+    </dl>
+    {{if .Event.Notes}}<section class="notes"><h2>About this event</h2><p>{{.Event.Notes}}</p></section>{{end}}
+    <div class="event-actions">
+      {{if eq .Event.Status "published"}}
+        {{if .LoggedIn}}
+          {{if .Joined}}
+            <form method="post" action="/event/{{.Event.ID}}/leave">
+              <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
+              <button class="button button-secondary" type="submit">Leave event</button>
+            </form>
+          {{else if gt .Event.Spots 0}}
+            <form method="post" action="/event/{{.Event.ID}}/join">
+              <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
+              <button class="button button-primary" type="submit">Join event</button>
+            </form>
+          {{else}}
+            <p class="full-label">This event is full.</p>
+          {{end}}
+          {{if .IsOwner}}
+            <a class="button button-secondary" href="/host/events/{{.Event.ID}}/edit">Edit event</a>
+            <form method="post" action="/host/events/{{.Event.ID}}/cancel">
+              <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
+              <button class="button button-danger" type="submit">Cancel event</button>
+            </form>
+          {{end}}
+        {{else}}
+          {{if gt .Event.Spots 0}}
+            <a class="button button-primary" href="/login">Sign in to join</a>
+          {{else}}
+            <p class="full-label">This event is full.</p>
+          {{end}}
+        {{end}}
+      {{end}}
+    </div>
+  </article>
+</main>
+{{end}}

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}} · TCG Party Locator</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/">TCG Party Locator</a>
+    <nav aria-label="Main navigation">
+      <a href="/">Find events</a>
+      {{if .LoggedIn}}
+        <a href="/host/events/new">Host an event</a>
+        <form class="inline-form" method="post" action="/logout">
+          <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
+          <button class="nav-button" type="submit">Sign out</button>
+        </form>
+      {{else}}
+        <a href="/login">Sign in</a>
+        <a class="nav-cta" href="/register">Create account</a>
+      {{end}}
+    </nav>
+  </header>
+  {{template "content" .}}
+  <footer class="site-footer">Find your next local TCG game.</footer>
+</body>
+</html>

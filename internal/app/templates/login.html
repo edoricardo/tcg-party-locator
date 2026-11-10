@@ -1,0 +1,19 @@
+{{define "content"}}
+<main class="page-shell narrow-shell">
+  <section class="form-panel">
+    <p class="eyebrow">WELCOME BACK</p>
+    <h1>Sign in</h1>
+    {{if .Error}}<p class="form-error" role="alert">{{.Error}}</p>{{end}}
+    <form class="stacked-form" method="post" action="/login">
+      <label>Email
+        <input type="email" name="email" autocomplete="email" required>
+      </label>
+      <label>Password
+        <input type="password" name="password" autocomplete="current-password" required>
+      </label>
+      <button class="button button-primary" type="submit">Sign in</button>
+    </form>
+    <p class="form-footnote">New to the table? <a href="/register">Create an account</a>.</p>
+  </section>
+</main>
+{{end}}

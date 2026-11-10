@@ -158,10 +158,10 @@ git commit -m "feat: add event participation" -m "Co-authored-by: Copilot <22355
 - Include the session CSRF token in every authenticated mutation form; validate it in form and JSON event mutation handlers.
 - Browser pages show public event details and do not expose account email addresses. Event dates use the existing RFC3339 model.
 
-- [ ] **Step 1: Write failing handler tests** for discovery HTML, filters, details, login/register forms, host-only management, join/leave actions, invalid CSRF tokens, and escaping of event-supplied HTML.
+- [ ] **Step 1: Write failing handler tests** for discovery HTML, filters, details, login/register forms, host-only management, join/leave actions, invalid CSRF tokens, escaping of event-supplied HTML, and responsive stylesheet delivery.
 - [ ] **Step 2: Run the focused tests to verify they fail**
 
-Run: `go test ./internal/app -run 'Test(Home|EventPage|LoginPage|RegisterPage|HostPage|EventPageEscapes)' -count=1`
+Run: `go test ./internal/app -run 'Test(Home|EventPage|LoginPage|RegisterPage|HostPage|ResponsiveCSS)' -count=1`
 Expected: FAIL because browser routes and templates do not exist.
 
 - [ ] **Step 3: Implement HTML handlers and templates** in `internal/app/web.go` and `internal/app/templates/`; use existing store and session interfaces.

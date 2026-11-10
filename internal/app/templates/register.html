@@ -1,0 +1,20 @@
+{{define "content"}}
+<main class="page-shell narrow-shell">
+  <section class="form-panel">
+    <p class="eyebrow">JOIN THE COMMUNITY</p>
+    <h1>Create your account</h1>
+    {{if .Error}}<p class="form-error" role="alert">{{.Error}}</p>{{end}}
+    <form class="stacked-form" method="post" action="/register">
+      <label>Email
+        <input type="email" name="email" autocomplete="email" required>
+      </label>
+      <label>Password
+        <input type="password" name="password" autocomplete="new-password" minlength="12" required>
+        <span class="field-help">Use at least 12 characters.</span>
+      </label>
+      <button class="button button-primary" type="submit">Create account</button>
+    </form>
+    <p class="form-footnote">Already have an account? <a href="/login">Sign in</a>.</p>
+  </section>
+</main>
+{{end}}

@@ -443,6 +443,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	mux.HandleFunc("/login", h.login)
 	mux.HandleFunc("/logout", h.logout)
 	mux.HandleFunc("/api/account", h.currentAccount)
+	mux.HandleFunc("/static/app.css", h.stylesheet)
+	mux.HandleFunc("/event/", h.webEvent)
+	mux.HandleFunc("/host/events/new", h.hostNewEvent)
+	mux.HandleFunc("/host/events", h.hostCreateEvent)
+	mux.HandleFunc("/host/events/", h.hostEvent)
 	mux.HandleFunc("/events", h.events)
 	mux.HandleFunc("/events/", h.eventDetail)
 	mux.HandleFunc("/", h.home)
@@ -454,11 +459,7 @@ func (h *Handler) home(w http.ResponseWriter, r *http.Request) {
 		h.notFound(w)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"message":  "Welcome to TCG Party Locator!",
-		"status":   "running",
-		"features": []string{"events", "search", "event-details"},
-	})
+	h.eventsPage(w, r)
 }
 
 func (h *Handler) health(w http.ResponseWriter, r *http.Request) {

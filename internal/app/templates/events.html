@@ -1,0 +1,51 @@
+{{define "content"}}
+<main class="page-shell">
+  <section class="hero">
+    <p class="eyebrow">PLAY TOGETHER</p>
+    <h1>Find your next TCG event</h1>
+    <p>Discover casual nights, competitive play, and tournaments in your area.</p>
+  </section>
+  <section class="search-panel" aria-labelledby="search-title">
+    <h2 id="search-title">Search events</h2>
+    <form class="search-form" method="get" action="/">
+      <label>City or region
+        <input type="search" name="city" value="{{.City}}" placeholder="Seattle">
+      </label>
+      <label>Game
+        <input type="search" name="game" value="{{.Game}}" placeholder="Commander">
+      </label>
+      <label>Search
+        <input type="search" name="q" value="{{.Query}}" placeholder="Name, venue, or format">
+      </label>
+      <button class="button button-primary" type="submit">Find events</button>
+    </form>
+  </section>
+  <section class="event-results" aria-labelledby="results-title">
+    <div class="section-heading">
+      <div>
+        <p class="eyebrow">UPCOMING</p>
+        <h2 id="results-title">Events near you</h2>
+      </div>
+      <span class="result-count">{{len .Events}} found</span>
+    </div>
+    {{if .Events}}
+      <div class="event-grid">
+        {{range .Events}}
+          <article class="event-card">
+            <p class="event-game">{{.Game}} <span>·</span> {{.Format}}</p>
+            <h3><a href="/event/{{.ID}}">{{.Name}}</a></h3>
+            <p class="event-place">{{.City}} · {{.Venue}}</p>
+            <p class="event-date"><time datetime="{{.Date}}">{{.Date}}</time></p>
+            <div class="event-card-footer">
+              <span>{{.Players}} playing</span>
+              <span>{{.Spots}} spots left</span>
+            </div>
+          </article>
+        {{end}}
+      </div>
+    {{else}}
+      <p class="empty-state">No upcoming events match those filters yet. Try another city or game.</p>
+    {{end}}
+  </section>
+</main>
+{{end}}

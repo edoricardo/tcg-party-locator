@@ -198,6 +198,10 @@ func (h *Handler) session(r *http.Request) (Session, bool) {
 }
 
 func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		h.renderPage(w, r, "register.html", h.pageData(r, "Create account"))
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -210,12 +214,18 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrDuplicateEmail):
-			http.Error(w, "email already registered", http.StatusConflict)
+			page := h.pageData(r, "Create account")
+			page.Error = "An account with that email already exists."
+			h.renderPageStatus(w, r, "register.html", page, http.StatusConflict)
 		case errors.Is(err, ErrInvalidAccount):
-			http.Error(w, "email or password is invalid", http.StatusBadRequest)
+			page := h.pageData(r, "Create account")
+			page.Error = "Enter a valid email and a password of at least 12 characters."
+			h.renderPageStatus(w, r, "register.html", page, http.StatusBadRequest)
 		default:
 			log.Printf("register account: %v", err)
-			http.Error(w, "could not create account", http.StatusInternalServerError)
+			page := h.pageData(r, "Create account")
+			page.Error = "Could not create account."
+			h.renderPageStatus(w, r, "register.html", page, http.StatusInternalServerError)
 		}
 		return
 	}
@@ -223,6 +233,10 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		h.renderPage(w, r, "login.html", h.pageData(r, "Sign in"))
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -234,11 +248,15 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	user, err := h.store.Authenticate(r.FormValue("email"), r.FormValue("password"))
 	if err != nil {
 		if errors.Is(err, ErrInvalidCredentials) {
-			http.Error(w, ErrInvalidCredentials.Error(), http.StatusUnauthorized)
+			page := h.pageData(r, "Sign in")
+			page.Error = ErrInvalidCredentials.Error()
+			h.renderPageStatus(w, r, "login.html", page, http.StatusUnauthorized)
 			return
 		}
 		log.Printf("authenticate account: %v", err)
-		http.Error(w, "could not sign in", http.StatusInternalServerError)
+		page := h.pageData(r, "Sign in")
+		page.Error = "Could not sign in."
+		h.renderPageStatus(w, r, "login.html", page, http.StatusInternalServerError)
 		return
 	}
 	h.createSession(w, r, user)

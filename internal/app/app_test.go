@@ -745,6 +745,233 @@ func TestConcurrentJoinsRespectCapacity(t *testing.T) {
 	}
 }
 
+func TestHomeRendersEventSearchAndFilters(t *testing.T) {
+	store := newTestStore(t)
+	handler := NewHandler(store)
+	req := httptest.NewRequest(http.MethodGet, "/?city=Seattle&game=Commander&q=Commander", nil)
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected discovery page status 200, got %d: %s", res.Code, res.Body.String())
+	}
+	if contentType := res.Header().Get("Content-Type"); !strings.HasPrefix(contentType, "text/html") {
+		t.Fatalf("expected HTML content type, got %q", contentType)
+	}
+	body := res.Body.String()
+	if !strings.Contains(body, "Commander Night") || strings.Contains(body, "MTG Draft Social") {
+		t.Fatalf("expected discovery results to apply filters, got %s", body)
+	}
+	if !strings.Contains(body, `name="city"`) || !strings.Contains(body, `name="game"`) || !strings.Contains(body, `name="q"`) {
+		t.Fatalf("expected city, game, and text search controls, got %s", body)
+	}
+}
+
+func TestEventPageJoinLeaveForms(t *testing.T) {
+	store := newTestStore(t)
+	handler := NewHandler(store)
+	event, _, _ := createOwnedTestEventWithSpots(t, handler, store, "host@example.com", 2)
+	playerCookie := registerTestAccount(t, handler, "player@example.com", "correct horse battery staple")
+	playerCSRF := csrfTokenForTest(t, store, "player@example.com")
+
+	detailReq := httptest.NewRequest(http.MethodGet, "/event/"+event.ID, nil)
+	detailReq.AddCookie(playerCookie)
+	detailRes := httptest.NewRecorder()
+	handler.ServeHTTP(detailRes, detailReq)
+	if detailRes.Code != http.StatusOK {
+		t.Fatalf("expected event page status 200, got %d: %s", detailRes.Code, detailRes.Body.String())
+	}
+	if !strings.Contains(detailRes.Body.String(), "/event/"+event.ID+"/join") {
+		t.Fatalf("expected join action on event page, got %s", detailRes.Body.String())
+	}
+
+	joinRes := submitForm(handler, http.MethodPost, "/event/"+event.ID+"/join", url.Values{
+		"_csrf": {playerCSRF},
+	}, playerCookie, "")
+	if joinRes.Code != http.StatusSeeOther {
+		t.Fatalf("expected join form to redirect, got %d: %s", joinRes.Code, joinRes.Body.String())
+	}
+	stored, _ := store.Get(event.ID)
+	if stored.Players != 1 || stored.Spots != 1 {
+		t.Fatalf("expected browser join to update attendance, got %+v", stored)
+	}
+
+	leaveRes := submitForm(handler, http.MethodPost, "/event/"+event.ID+"/leave", url.Values{
+		"_csrf": {playerCSRF},
+	}, playerCookie, "")
+	if leaveRes.Code != http.StatusSeeOther {
+		t.Fatalf("expected leave form to redirect, got %d: %s", leaveRes.Code, leaveRes.Body.String())
+	}
+	stored, _ = store.Get(event.ID)
+	if stored.Players != 0 || stored.Spots != 2 {
+		t.Fatalf("expected browser leave to restore capacity, got %+v", stored)
+	}
+}
+
+func TestEventPageRejectsInvalidCSRF(t *testing.T) {
+	store := newTestStore(t)
+	handler := NewHandler(store)
+	event, _, _ := createOwnedTestEventWithSpots(t, handler, store, "host@example.com", 1)
+	playerCookie := registerTestAccount(t, handler, "player@example.com", "correct horse battery staple")
+
+	res := submitForm(handler, http.MethodPost, "/event/"+event.ID+"/join", url.Values{
+		"_csrf": {"not-the-session-token"},
+	}, playerCookie, "")
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("expected invalid CSRF token to return 403, got %d: %s", res.Code, res.Body.String())
+	}
+}
+
+func TestLoginPageRenders(t *testing.T) {
+	handler := NewHandler(newTestStore(t))
+	req := httptest.NewRequest(http.MethodGet, "/login", nil)
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `action="/login"`) {
+		t.Fatalf("expected login form, got %d: %s", res.Code, res.Body.String())
+	}
+}
+
+func TestRegisterPageRenders(t *testing.T) {
+	handler := NewHandler(newTestStore(t))
+	req := httptest.NewRequest(http.MethodGet, "/register", nil)
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `action="/register"`) {
+		t.Fatalf("expected registration form, got %d: %s", res.Code, res.Body.String())
+	}
+}
+
+func TestHostPageManagement(t *testing.T) {
+	store := newTestStore(t)
+	handler := NewHandler(store)
+	ownerCookie := registerTestAccount(t, handler, "owner@example.com", "correct horse battery staple")
+	ownerCSRF := csrfTokenForTest(t, store, "owner@example.com")
+	unauthenticatedReq := httptest.NewRequest(http.MethodGet, "/host/events/new", nil)
+	unauthenticatedRes := httptest.NewRecorder()
+	handler.ServeHTTP(unauthenticatedRes, unauthenticatedReq)
+	if unauthenticatedRes.Code != http.StatusSeeOther || unauthenticatedRes.Header().Get("Location") != "/login" {
+		t.Fatalf("expected host creation to require login, got %d and Location %q", unauthenticatedRes.Code, unauthenticatedRes.Header().Get("Location"))
+	}
+
+	newEvent := newTestEvent("Host form event", "Tacoma")
+	createForm := url.Values{
+		"_csrf":    {ownerCSRF},
+		"name":     {newEvent.Name},
+		"game":     {newEvent.Game},
+		"city":     {newEvent.City},
+		"venue":    {newEvent.Venue},
+		"date":     {newEvent.Date},
+		"format":   {newEvent.Format},
+		"capacity": {"8"},
+		"host":     {newEvent.Host},
+	}
+	createRes := submitForm(handler, http.MethodPost, "/host/events", createForm, ownerCookie, "")
+	if createRes.Code != http.StatusSeeOther {
+		t.Fatalf("expected host event creation to redirect, got %d: %s", createRes.Code, createRes.Body.String())
+	}
+	var event Event
+	if err := store.db.QueryRow("SELECT id FROM events WHERE name = ?", "Host form event").Scan(&event.ID); err != nil {
+		t.Fatalf("failed to find host-created event: %v", err)
+	}
+	event, ok := store.Get(event.ID)
+	if !ok || event.Players != 0 || event.Spots != 8 {
+		t.Fatalf("expected host-created event capacity to be eight, got %+v", event)
+	}
+
+	editReq := httptest.NewRequest(http.MethodGet, "/host/events/"+event.ID+"/edit", nil)
+	editReq.AddCookie(ownerCookie)
+	editRes := httptest.NewRecorder()
+	handler.ServeHTTP(editRes, editReq)
+	if editRes.Code != http.StatusOK || !strings.Contains(editRes.Body.String(), "Edit event") {
+		t.Fatalf("expected owner event editor, got %d: %s", editRes.Code, editRes.Body.String())
+	}
+	editForm := url.Values{
+		"_csrf":    {ownerCSRF},
+		"name":     {"Edited by host"},
+		"game":     {event.Game},
+		"city":     {event.City},
+		"venue":    {event.Venue},
+		"date":     {event.Date},
+		"format":   {event.Format},
+		"capacity": {"12"},
+		"host":     {event.Host},
+	}
+	updateRes := submitForm(handler, http.MethodPost, "/host/events/"+event.ID+"/edit", editForm, ownerCookie, "")
+	if updateRes.Code != http.StatusSeeOther {
+		t.Fatalf("expected host event update to redirect, got %d: %s", updateRes.Code, updateRes.Body.String())
+	}
+	event, _ = store.Get(event.ID)
+	if event.Name != "Edited by host" || event.Spots != 12 {
+		t.Fatalf("expected host edit to update event fields and remaining capacity, got %+v", event)
+	}
+
+	otherCookie := registerTestAccount(t, handler, "other@example.com", "correct horse battery staple")
+	otherReq := httptest.NewRequest(http.MethodGet, "/host/events/"+event.ID+"/edit", nil)
+	otherReq.AddCookie(otherCookie)
+	otherRes := httptest.NewRecorder()
+	handler.ServeHTTP(otherRes, otherReq)
+	if otherRes.Code != http.StatusForbidden {
+		t.Fatalf("expected non-owner editor access to return 403, got %d: %s", otherRes.Code, otherRes.Body.String())
+	}
+	cancelRes := submitForm(handler, http.MethodPost, "/host/events/"+event.ID+"/cancel", url.Values{
+		"_csrf": {ownerCSRF},
+	}, ownerCookie, "")
+	if cancelRes.Code != http.StatusSeeOther {
+		t.Fatalf("expected host event cancellation to redirect, got %d: %s", cancelRes.Code, cancelRes.Body.String())
+	}
+	event, _ = store.Get(event.ID)
+	if event.Status != "cancelled" {
+		t.Fatalf("expected host cancellation to mark event cancelled, got %+v", event)
+	}
+}
+
+func TestEventPageEscapesUserContent(t *testing.T) {
+	store := newTestStore(t)
+	handler := NewHandler(store)
+	hostCookie := registerTestAccount(t, handler, "host@example.com", "correct horse battery staple")
+	hostCSRF := csrfTokenForTest(t, store, "host@example.com")
+	event := newTestEvent("Escaping test", "Tacoma")
+	event.Notes = `<script>alert("x")</script>`
+	body, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("failed to encode event: %v", err)
+	}
+	createRes := requestJSON(handler, http.MethodPost, "/events", body, hostCookie, hostCSRF)
+	if createRes.Code != http.StatusCreated {
+		t.Fatalf("failed to create event with test content: %d: %s", createRes.Code, createRes.Body.String())
+	}
+	var response struct {
+		Event Event `json:"event"`
+	}
+	if err := json.Unmarshal(createRes.Body.Bytes(), &response); err != nil {
+		t.Fatalf("failed to decode created event: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/event/"+response.Event.ID, nil)
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected event page status 200, got %d: %s", res.Code, res.Body.String())
+	}
+	if strings.Contains(res.Body.String(), event.Notes) || !strings.Contains(res.Body.String(), `&lt;script&gt;alert(&#34;x&#34;)&lt;/script&gt;`) {
+		t.Fatalf("expected event notes to be HTML-escaped, got %s", res.Body.String())
+	}
+	if strings.Contains(res.Body.String(), "host@example.com") {
+		t.Fatalf("event page exposed host account email: %s", res.Body.String())
+	}
+}
+
+func TestResponsiveCSSServed(t *testing.T) {
+	handler := NewHandler(newTestStore(t))
+	req := httptest.NewRequest(http.MethodGet, "/static/app.css", nil)
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), "@media") {
+		t.Fatalf("expected responsive stylesheet, got %d: %s", res.Code, res.Body.String())
+	}
+}
+
 func newTestEvent(name, city string) Event {
 	return Event{
 		Name:    name,

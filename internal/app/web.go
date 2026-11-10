@@ -262,7 +262,8 @@ func (h *Handler) editBrowserEvent(w http.ResponseWriter, r *http.Request, sessi
 	}
 	updated, err := eventFromForm(r, event.Players)
 	if err == nil {
-		updated, err = h.store.Update(session.User.ID, event.ID, updated)
+		capacity := updated.Players + updated.Spots
+		updated, err = h.store.UpdateWithCapacity(session.User.ID, event.ID, updated, capacity)
 	}
 	if err != nil {
 		status := http.StatusBadRequest

@@ -363,6 +363,14 @@ func (s *EventStore) Add(ownerID string, evt Event) (Event, error) {
 }
 
 func (s *EventStore) Update(ownerID, eventID string, evt Event) (Event, error) {
+	return s.update(ownerID, eventID, evt, nil)
+}
+
+func (s *EventStore) UpdateWithCapacity(ownerID, eventID string, evt Event, capacity int) (Event, error) {
+	return s.update(ownerID, eventID, evt, &capacity)
+}
+
+func (s *EventStore) update(ownerID, eventID string, evt Event, capacity *int) (Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -388,20 +396,67 @@ func (s *EventStore) Update(ownerID, eventID string, evt Event) (Event, error) {
 	evt.OwnerID = ownerID
 	evt.Status = status
 	evt.Players = players
+	if capacity != nil {
+		if *capacity < players {
+			return Event{}, fmt.Errorf("%w: capacity cannot be less than current player count", ErrInvalidEvent)
+		}
+		evt.Spots = *capacity - players
+	}
 	if err := evt.Validate(); err != nil {
 		return Event{}, err
 	}
-	_, err = s.db.Exec(`
-		UPDATE events
-		SET name = ?, game = ?, city = ?, venue = ?, date = ?, format = ?, spots = ?,
-			host = ?, address = ?, notes = ?
-		WHERE id = ? AND owner_id = ? AND status = 'published'
-	`, evt.Name, evt.Game, evt.City, evt.Venue, evt.Date, evt.Format, evt.Spots,
-		evt.Host, evt.Address, evt.Notes, eventID, ownerID)
+	var result sql.Result
+	if capacity == nil {
+		result, err = s.db.Exec(`
+			UPDATE events
+			SET name = ?, game = ?, city = ?, venue = ?, date = ?, format = ?, spots = ?,
+				host = ?, address = ?, notes = ?
+			WHERE id = ? AND owner_id = ? AND status = 'published'
+		`, evt.Name, evt.Game, evt.City, evt.Venue, evt.Date, evt.Format, evt.Spots,
+			evt.Host, evt.Address, evt.Notes, eventID, ownerID)
+	} else {
+		result, err = s.db.Exec(`
+			UPDATE events
+			SET name = ?, game = ?, city = ?, venue = ?, date = ?, format = ?, spots = ? - players,
+				host = ?, address = ?, notes = ?
+			WHERE id = ? AND owner_id = ? AND status = 'published' AND players <= ?
+		`, evt.Name, evt.Game, evt.City, evt.Venue, evt.Date, evt.Format, *capacity,
+			evt.Host, evt.Address, evt.Notes, eventID, ownerID, *capacity)
+	}
 	if err != nil {
 		return Event{}, err
 	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return Event{}, err
+	}
+	if updated != 1 {
+		return Event{}, s.updateRejection(ownerID, eventID, capacity)
+	}
 	return evt, nil
+}
+
+func (s *EventStore) updateRejection(ownerID, eventID string, capacity *int) error {
+	var storedOwner sql.NullString
+	var players int
+	var status string
+	err := s.db.QueryRow("SELECT owner_id, players, status FROM events WHERE id = ?", eventID).Scan(&storedOwner, &players, &status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrEventNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if !storedOwner.Valid || storedOwner.String != ownerID {
+		return ErrNotEventOwner
+	}
+	if status != "published" {
+		return ErrEventCancelled
+	}
+	if capacity != nil && players > *capacity {
+		return fmt.Errorf("%w: capacity cannot be less than current player count", ErrInvalidEvent)
+	}
+	return errors.New("event changed while it was being updated")
 }
 
 func (s *EventStore) Cancel(ownerID, eventID string) error {

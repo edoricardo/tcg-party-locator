@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -923,6 +924,78 @@ func TestHostPageManagement(t *testing.T) {
 	event, _ = store.Get(event.ID)
 	if event.Status != "cancelled" {
 		t.Fatalf("expected host cancellation to mark event cancelled, got %+v", event)
+	}
+}
+
+func TestHostEventEditUsesCurrentPlayerCountForCapacity(t *testing.T) {
+	store := newTestStore(t)
+	handler := NewHandler(store)
+	event, ownerCookie, ownerCSRF := createOwnedTestEventWithSpots(t, handler, store, "owner@example.com", 2)
+	playerCookie := registerTestAccount(t, handler, "player@example.com", "correct horse battery staple")
+	playerRequest := httptest.NewRequest(http.MethodGet, "/", nil)
+	playerRequest.AddCookie(playerCookie)
+	playerSession, ok := handler.session(playerRequest)
+	if !ok {
+		t.Fatal("expected registered player session")
+	}
+
+	form := url.Values{
+		"_csrf":    {ownerCSRF},
+		"name":     {event.Name},
+		"game":     {event.Game},
+		"city":     {event.City},
+		"venue":    {event.Venue},
+		"date":     {event.Date},
+		"format":   {event.Format},
+		"capacity": {"1"},
+		"host":     {event.Host},
+	}
+	bodyReader, bodyWriter := io.Pipe()
+	defer bodyReader.Close()
+	defer bodyWriter.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/host/events/"+event.ID+"/edit", bodyReader)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(ownerCookie)
+	res := httptest.NewRecorder()
+	requestDone := make(chan struct{})
+	go func() {
+		handler.ServeHTTP(res, req)
+		close(requestDone)
+	}()
+
+	bodyWritten := make(chan error, 1)
+	go func() {
+		_, err := io.WriteString(bodyWriter, form.Encode())
+		bodyWritten <- err
+	}()
+	select {
+	case err := <-bodyWritten:
+		if err != nil {
+			t.Fatalf("failed to stream edit form: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("handler did not read the edit form")
+	}
+
+	if err := store.JoinEvent(playerSession.User.ID, event.ID); err != nil {
+		t.Fatalf("player failed to join while edit form was being read: %v", err)
+	}
+	if err := bodyWriter.Close(); err != nil {
+		t.Fatalf("failed to finish edit form: %v", err)
+	}
+	select {
+	case <-requestDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("host edit request did not complete")
+	}
+	if res.Code != http.StatusSeeOther {
+		t.Fatalf("expected host edit to redirect, got %d: %s", res.Code, res.Body.String())
+	}
+
+	stored, ok := store.Get(event.ID)
+	if !ok || stored.Players != 1 || stored.Players+stored.Spots != 1 {
+		t.Fatalf("expected edit to preserve the requested capacity of one after the join, got %+v", stored)
 	}
 }
 

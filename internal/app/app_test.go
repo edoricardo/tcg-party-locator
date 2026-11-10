@@ -601,6 +601,150 @@ func TestListEventsExcludesPast(t *testing.T) {
 	}
 }
 
+func TestJoinLeaveEventMaintainsCapacity(t *testing.T) {
+	store := newTestStore(t)
+	handler := NewHandler(store)
+	event, _, _ := createOwnedTestEventWithSpots(t, handler, store, "host@example.com", 2)
+	playerCookie := registerTestAccount(t, handler, "player@example.com", "correct horse battery staple")
+	playerCSRF := csrfTokenForTest(t, store, "player@example.com")
+
+	beforeReq := httptest.NewRequest(http.MethodGet, "/events/"+event.ID, nil)
+	beforeRes := httptest.NewRecorder()
+	handler.ServeHTTP(beforeRes, beforeReq)
+	var before struct {
+		Event  Event `json:"event"`
+		Joined bool  `json:"joined"`
+	}
+	if err := json.Unmarshal(beforeRes.Body.Bytes(), &before); err != nil {
+		t.Fatalf("failed to decode public event detail: %v", err)
+	}
+	if before.Joined {
+		t.Fatal("expected a non-member to have joined=false")
+	}
+
+	joinRes := requestJSON(handler, http.MethodPost, "/events/"+event.ID+"/join", nil, playerCookie, playerCSRF)
+	if joinRes.Code != http.StatusOK {
+		t.Fatalf("expected join to return 200, got %d: %s", joinRes.Code, joinRes.Body.String())
+	}
+	duplicateRes := requestJSON(handler, http.MethodPost, "/events/"+event.ID+"/join", nil, playerCookie, playerCSRF)
+	if duplicateRes.Code != http.StatusOK {
+		t.Fatalf("expected duplicate join to be idempotent, got %d: %s", duplicateRes.Code, duplicateRes.Body.String())
+	}
+	stored, ok := store.Get(event.ID)
+	if !ok || stored.Players != 1 || stored.Spots != 1 {
+		t.Fatalf("expected one participant and one open spot after duplicate join, got %+v", stored)
+	}
+
+	afterReq := httptest.NewRequest(http.MethodGet, "/events/"+event.ID, nil)
+	afterReq.AddCookie(playerCookie)
+	afterRes := httptest.NewRecorder()
+	handler.ServeHTTP(afterRes, afterReq)
+	var after struct {
+		Joined bool `json:"joined"`
+	}
+	if err := json.Unmarshal(afterRes.Body.Bytes(), &after); err != nil {
+		t.Fatalf("failed to decode joined event detail: %v", err)
+	}
+	if !after.Joined {
+		t.Fatal("expected the signed-in participant to have joined=true")
+	}
+
+	otherCookie := registerTestAccount(t, handler, "other@example.com", "correct horse battery staple")
+	otherCSRF := csrfTokenForTest(t, store, "other@example.com")
+	otherLeave := requestJSON(handler, http.MethodDelete, "/events/"+event.ID+"/join", nil, otherCookie, otherCSRF)
+	if otherLeave.Code != http.StatusOK {
+		t.Fatalf("expected non-member leave to be idempotent, got %d: %s", otherLeave.Code, otherLeave.Body.String())
+	}
+	stored, _ = store.Get(event.ID)
+	if stored.Players != 1 || stored.Spots != 1 {
+		t.Fatalf("non-member leave changed event capacity: %+v", stored)
+	}
+
+	leaveRes := requestJSON(handler, http.MethodDelete, "/events/"+event.ID+"/join", nil, playerCookie, playerCSRF)
+	if leaveRes.Code != http.StatusOK {
+		t.Fatalf("expected leave to return 200, got %d: %s", leaveRes.Code, leaveRes.Body.String())
+	}
+	stored, _ = store.Get(event.ID)
+	if stored.Players != 0 || stored.Spots != 2 {
+		t.Fatalf("expected leave to restore capacity, got %+v", stored)
+	}
+}
+
+func TestJoinFullEventRejected(t *testing.T) {
+	store := newTestStore(t)
+	handler := NewHandler(store)
+	event, _, _ := createOwnedTestEventWithSpots(t, handler, store, "host@example.com", 1)
+	firstCookie := registerTestAccount(t, handler, "first@example.com", "correct horse battery staple")
+	secondCookie := registerTestAccount(t, handler, "second@example.com", "correct horse battery staple")
+	firstCSRF := csrfTokenForTest(t, store, "first@example.com")
+	secondCSRF := csrfTokenForTest(t, store, "second@example.com")
+
+	firstJoin := requestJSON(handler, http.MethodPost, "/events/"+event.ID+"/join", nil, firstCookie, firstCSRF)
+	if firstJoin.Code != http.StatusOK {
+		t.Fatalf("failed to fill event: %d: %s", firstJoin.Code, firstJoin.Body.String())
+	}
+	fullJoin := requestJSON(handler, http.MethodPost, "/events/"+event.ID+"/join", nil, secondCookie, secondCSRF)
+	if fullJoin.Code != http.StatusConflict {
+		t.Fatalf("expected full event to return 409, got %d: %s", fullJoin.Code, fullJoin.Body.String())
+	}
+	stored, _ := store.Get(event.ID)
+	if stored.Players != 1 || stored.Spots != 0 {
+		t.Fatalf("full-event rejection changed capacity: %+v", stored)
+	}
+}
+
+func TestJoinCancelledEventRejected(t *testing.T) {
+	store := newTestStore(t)
+	handler := NewHandler(store)
+	event, hostCookie, hostCSRF := createOwnedTestEventWithSpots(t, handler, store, "host@example.com", 2)
+	playerCookie := registerTestAccount(t, handler, "player@example.com", "correct horse battery staple")
+	playerCSRF := csrfTokenForTest(t, store, "player@example.com")
+
+	cancelRes := requestJSON(handler, http.MethodDelete, "/events/"+event.ID, nil, hostCookie, hostCSRF)
+	if cancelRes.Code != http.StatusOK {
+		t.Fatalf("failed to cancel event: %d: %s", cancelRes.Code, cancelRes.Body.String())
+	}
+	joinRes := requestJSON(handler, http.MethodPost, "/events/"+event.ID+"/join", nil, playerCookie, playerCSRF)
+	if joinRes.Code != http.StatusConflict {
+		t.Fatalf("expected cancelled event join to return 409, got %d: %s", joinRes.Code, joinRes.Body.String())
+	}
+	stored, _ := store.Get(event.ID)
+	if stored.Players != 0 || stored.Spots != 2 {
+		t.Fatalf("cancelled-event rejection changed capacity: %+v", stored)
+	}
+}
+
+func TestConcurrentJoinsRespectCapacity(t *testing.T) {
+	store := newTestStore(t)
+	handler := NewHandler(store)
+	event, _, _ := createOwnedTestEventWithSpots(t, handler, store, "host@example.com", 1)
+	cookies := []*http.Cookie{
+		registerTestAccount(t, handler, "first@example.com", "correct horse battery staple"),
+		registerTestAccount(t, handler, "second@example.com", "correct horse battery staple"),
+	}
+	csrfTokens := []string{
+		csrfTokenForTest(t, store, "first@example.com"),
+		csrfTokenForTest(t, store, "second@example.com"),
+	}
+
+	statuses := make(chan int, 2)
+	for i := range cookies {
+		go func(cookie *http.Cookie, csrfToken string) {
+			res := requestJSON(handler, http.MethodPost, "/events/"+event.ID+"/join", nil, cookie, csrfToken)
+			statuses <- res.Code
+		}(cookies[i], csrfTokens[i])
+	}
+	firstStatus, secondStatus := <-statuses, <-statuses
+	if !((firstStatus == http.StatusOK && secondStatus == http.StatusConflict) ||
+		(firstStatus == http.StatusConflict && secondStatus == http.StatusOK)) {
+		t.Fatalf("expected exactly one successful join and one full-event conflict, got %d and %d", firstStatus, secondStatus)
+	}
+	stored, _ := store.Get(event.ID)
+	if stored.Players != 1 || stored.Spots != 0 {
+		t.Fatalf("concurrent joins exceeded capacity: %+v", stored)
+	}
+}
+
 func newTestEvent(name, city string) Event {
 	return Event{
 		Name:    name,
@@ -617,9 +761,15 @@ func newTestEvent(name, city string) Event {
 
 func createOwnedTestEvent(t *testing.T, handler http.Handler, store *EventStore, email string) (Event, *http.Cookie, string) {
 	t.Helper()
+	return createOwnedTestEventWithSpots(t, handler, store, email, 10)
+}
+
+func createOwnedTestEventWithSpots(t *testing.T, handler http.Handler, store *EventStore, email string, spots int) (Event, *http.Cookie, string) {
+	t.Helper()
 	cookie := registerTestAccount(t, handler, email, "correct horse battery staple")
 	csrfToken := csrfTokenForTest(t, store, email)
 	event := newTestEvent("Owned test event", "Tacoma")
+	event.Spots = spots
 	body, err := json.Marshal(event)
 	if err != nil {
 		t.Fatalf("failed to encode test event: %v", err)

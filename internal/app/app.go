@@ -166,6 +166,12 @@ func (s *EventStore) ensureSchema() error {
 			user_id TEXT NOT NULL REFERENCES users(id),
 			csrf_token TEXT NOT NULL,
 			expires_at TEXT NOT NULL
+		);
+		CREATE TABLE IF NOT EXISTS event_participants (
+			event_id TEXT NOT NULL REFERENCES events(id),
+			user_id TEXT NOT NULL REFERENCES users(id),
+			joined_at TEXT NOT NULL,
+			PRIMARY KEY (event_id, user_id)
 		);`)
 	if err != nil {
 		return err
@@ -505,6 +511,16 @@ func (h *Handler) events(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) eventDetail(w http.ResponseWriter, r *http.Request) {
+	if strings.HasSuffix(r.URL.Path, "/join") {
+		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/events/"), "/join")
+		if id == "" || strings.Contains(id, "/") {
+			h.notFound(w)
+			return
+		}
+		h.eventParticipation(w, r, id)
+		return
+	}
+
 	id := strings.TrimPrefix(r.URL.Path, "/events/")
 	if id == "" || strings.Contains(id, "/") {
 		h.notFound(w)
@@ -518,7 +534,17 @@ func (h *Handler) eventDetail(w http.ResponseWriter, r *http.Request) {
 			h.notFound(w)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"event": event})
+		joined := false
+		if session, authenticated := h.session(r); authenticated {
+			var err error
+			joined, err = h.store.HasJoined(session.User.ID, id)
+			if err != nil {
+				log.Printf("read event membership: %v", err)
+				writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not read event"})
+				return
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"event": event, "joined": joined})
 	case http.MethodPut:
 		session, ok := h.session(r)
 		if !ok {
@@ -565,6 +591,40 @@ func (h *Handler) eventDetail(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (h *Handler) eventParticipation(w http.ResponseWriter, r *http.Request, eventID string) {
+	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+	session, ok := h.session(r)
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authentication required"})
+		return
+	}
+	if !validCSRFToken(r, session.CSRFToken) {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "invalid CSRF token"})
+		return
+	}
+
+	var err error
+	joined := r.Method == http.MethodPost
+	if joined {
+		err = h.store.JoinEvent(session.User.ID, eventID)
+	} else {
+		err = h.store.LeaveEvent(session.User.ID, eventID)
+	}
+	if err != nil {
+		writeEventError(w, err)
+		return
+	}
+	event, ok := h.store.Get(eventID)
+	if !ok {
+		h.notFound(w)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"event": event, "joined": joined})
+}
+
 func writeEventError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrInvalidEvent):
@@ -575,7 +635,10 @@ func writeEventError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusForbidden, map[string]any{"error": "event owner required"})
 	case errors.Is(err, ErrEventCancelled):
 		writeJSON(w, http.StatusConflict, map[string]any{"error": "event is cancelled"})
+	case errors.Is(err, ErrEventFull):
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "event is full"})
 	default:
+		log.Printf("event operation: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not update event"})
 	}
 }
@@ -597,4 +660,5 @@ var (
 	ErrEventNotFound  = errors.New("event not found")
 	ErrNotEventOwner  = errors.New("not event owner")
 	ErrEventCancelled = errors.New("event is cancelled")
+	ErrEventFull      = errors.New("event is full")
 )

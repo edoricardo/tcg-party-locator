@@ -20,6 +20,8 @@ import (
 // Event represents a public TCG gathering or event.
 type Event struct {
 	ID      string `json:"id"`
+	OwnerID string `json:"-"`
+	Status  string `json:"status"`
 	Name    string `json:"name"`
 	Game    string `json:"game"`
 	City    string `json:"city"`
@@ -73,6 +75,8 @@ func normalizeEvent(evt Event) Event {
 
 	cleaned := Event{
 		ID:      evt.ID,
+		OwnerID: evt.OwnerID,
+		Status:  strings.TrimSpace(evt.Status),
 		Name:    strings.TrimSpace(evt.Name),
 		Game:    strings.TrimSpace(evt.Game),
 		City:    strings.TrimSpace(evt.City),
@@ -147,7 +151,9 @@ func (s *EventStore) ensureSchema() error {
 			spots INTEGER NOT NULL,
 			host TEXT NOT NULL,
 			address TEXT,
-			notes TEXT
+			notes TEXT,
+			owner_id TEXT,
+			status TEXT NOT NULL DEFAULT 'published'
 		);
 		CREATE TABLE IF NOT EXISTS users (
 			id TEXT PRIMARY KEY,
@@ -161,7 +167,39 @@ func (s *EventStore) ensureSchema() error {
 			csrf_token TEXT NOT NULL,
 			expires_at TEXT NOT NULL
 		);`)
-	return err
+	if err != nil {
+		return err
+	}
+
+	rows, err := s.db.Query("PRAGMA table_info(events)")
+	if err != nil {
+		return err
+	}
+	columns := make(map[string]bool)
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		columns[name] = true
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if !columns["owner_id"] {
+		if _, err := s.db.Exec("ALTER TABLE events ADD COLUMN owner_id TEXT"); err != nil {
+			return err
+		}
+	}
+	if !columns["status"] {
+		if _, err := s.db.Exec("ALTER TABLE events ADD COLUMN status TEXT NOT NULL DEFAULT 'published'"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *EventStore) seedDefaults() error {
@@ -173,11 +211,12 @@ func (s *EventStore) seedDefaults() error {
 		return nil
 	}
 
+	now := time.Now().UTC()
 	defaultEvents := []Event{
-		{ID: "evt-1001", Name: "Commander Night", Game: "Commander", City: "Seattle", Venue: "The Dragon's Den", Date: "2026-11-08T18:30:00Z", Format: "Casual Draft", Players: 14, Spots: 6, Host: "Avery", Address: "120 Pine St", Notes: "Bring your own sleeves."},
-		{ID: "evt-1002", Name: "Modern Clash", Game: "Modern", City: "Seattle", Venue: "Northside Tabletop", Date: "2026-11-09T13:00:00Z", Format: "Competitive Standard", Players: 16, Spots: 8, Host: "Milo", Address: "45 Lakeview Ave", Notes: "Prize support included."},
-		{ID: "evt-1003", Name: "Pokémon League Cup", Game: "Pokémon", City: "Portland", Venue: "Arcade & Co.", Date: "2026-11-10T17:00:00Z", Format: "Swiss", Players: 10, Spots: 12, Host: "Sofia", Address: "88 River Blvd", Notes: "Junior division available."},
-		{ID: "evt-1004", Name: "MTG Draft Social", Game: "Magic: The Gathering", City: "Portland", Venue: "Copper Lantern", Date: "2026-11-12T19:00:00Z", Format: "Draft", Players: 12, Spots: 4, Host: "Jen", Address: "411 Alder Way", Notes: "Food truck outside after round 2."},
+		{ID: "evt-1001", Name: "Commander Night", Game: "Commander", City: "Seattle", Venue: "The Dragon's Den", Date: now.AddDate(0, 0, 2).Format(time.RFC3339), Format: "Casual Draft", Players: 14, Spots: 6, Host: "Avery", Address: "120 Pine St", Notes: "Bring your own sleeves."},
+		{ID: "evt-1002", Name: "Modern Clash", Game: "Modern", City: "Seattle", Venue: "Northside Tabletop", Date: now.AddDate(0, 0, 3).Format(time.RFC3339), Format: "Competitive Standard", Players: 16, Spots: 8, Host: "Milo", Address: "45 Lakeview Ave", Notes: "Prize support included."},
+		{ID: "evt-1003", Name: "Pokémon League Cup", Game: "Pokémon", City: "Portland", Venue: "Arcade & Co.", Date: now.AddDate(0, 0, 4).Format(time.RFC3339), Format: "Swiss", Players: 10, Spots: 12, Host: "Sofia", Address: "88 River Blvd", Notes: "Junior division available."},
+		{ID: "evt-1004", Name: "MTG Draft Social", Game: "Magic: The Gathering", City: "Portland", Venue: "Copper Lantern", Date: now.AddDate(0, 0, 6).Format(time.RFC3339), Format: "Draft", Players: 12, Spots: 4, Host: "Jen", Address: "411 Alder Way", Notes: "Food truck outside after round 2."},
 	}
 
 	for _, event := range defaultEvents {
@@ -195,7 +234,7 @@ func (s *EventStore) List(city, game, query string) []Event {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	queryBuilder := `SELECT id, name, game, city, venue, date, format, players, spots, host, address, notes FROM events WHERE 1 = 1`
+	queryBuilder := `SELECT id, name, game, city, venue, date, format, players, spots, host, address, notes, owner_id, status FROM events WHERE status = 'published'`
 	args := make([]any, 0, 6)
 
 	if city != "" {
@@ -219,9 +258,18 @@ func (s *EventStore) List(city, game, query string) []Event {
 	defer rows.Close()
 
 	results := make([]Event, 0)
+	now := time.Now()
 	for rows.Next() {
 		var event Event
-		if err := rows.Scan(&event.ID, &event.Name, &event.Game, &event.City, &event.Venue, &event.Date, &event.Format, &event.Players, &event.Spots, &event.Host, &event.Address, &event.Notes); err != nil {
+		var ownerID sql.NullString
+		if err := rows.Scan(&event.ID, &event.Name, &event.Game, &event.City, &event.Venue, &event.Date, &event.Format, &event.Players, &event.Spots, &event.Host, &event.Address, &event.Notes, &ownerID, &event.Status); err != nil {
+			continue
+		}
+		if ownerID.Valid {
+			event.OwnerID = ownerID.String
+		}
+		eventTime, err := parseEventTime(event.Date)
+		if err != nil || eventTime.Before(now) {
 			continue
 		}
 		results = append(results, event)
@@ -257,7 +305,8 @@ func (s *EventStore) Get(id string) (Event, bool) {
 	defer s.mu.RUnlock()
 
 	var event Event
-	if err := s.db.QueryRow(`SELECT id, name, game, city, venue, date, format, players, spots, host, address, notes FROM events WHERE id = ?`, id).Scan(
+	var ownerID sql.NullString
+	if err := s.db.QueryRow(`SELECT id, name, game, city, venue, date, format, players, spots, host, address, notes, owner_id, status FROM events WHERE id = ?`, id).Scan(
 		&event.ID,
 		&event.Name,
 		&event.Game,
@@ -270,29 +319,106 @@ func (s *EventStore) Get(id string) (Event, bool) {
 		&event.Host,
 		&event.Address,
 		&event.Notes,
+		&ownerID,
+		&event.Status,
 	); err != nil {
 		return Event{}, false
+	}
+	if ownerID.Valid {
+		event.OwnerID = ownerID.String
 	}
 	return event, true
 }
 
-func (s *EventStore) Add(evt Event) (Event, error) {
+func (s *EventStore) Add(ownerID string, evt Event) (Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	evt = normalizeEvent(evt)
+	evt.OwnerID = ownerID
+	evt.Status = "published"
+	evt.Players = 0
 	if err := evt.Validate(); err != nil {
 		return Event{}, err
 	}
 
+	var owner any
+	if ownerID != "" {
+		owner = ownerID
+	}
 	_, err := s.db.Exec(`
-		INSERT INTO events (id, name, game, city, venue, date, format, players, spots, host, address, notes)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, evt.ID, evt.Name, evt.Game, evt.City, evt.Venue, evt.Date, evt.Format, evt.Players, evt.Spots, evt.Host, evt.Address, evt.Notes)
+		INSERT INTO events (id, name, game, city, venue, date, format, players, spots, host, address, notes, owner_id, status)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, evt.ID, evt.Name, evt.Game, evt.City, evt.Venue, evt.Date, evt.Format, evt.Players, evt.Spots, evt.Host, evt.Address, evt.Notes, owner, evt.Status)
 	if err != nil {
 		return Event{}, err
 	}
 	return evt, nil
+}
+
+func (s *EventStore) Update(ownerID, eventID string, evt Event) (Event, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var storedOwner sql.NullString
+	var players int
+	var status string
+	err := s.db.QueryRow("SELECT owner_id, players, status FROM events WHERE id = ?", eventID).Scan(&storedOwner, &players, &status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Event{}, ErrEventNotFound
+	}
+	if err != nil {
+		return Event{}, err
+	}
+	if !storedOwner.Valid || storedOwner.String != ownerID {
+		return Event{}, ErrNotEventOwner
+	}
+	if status != "published" {
+		return Event{}, ErrEventCancelled
+	}
+
+	evt = normalizeEvent(evt)
+	evt.ID = eventID
+	evt.OwnerID = ownerID
+	evt.Status = status
+	evt.Players = players
+	if err := evt.Validate(); err != nil {
+		return Event{}, err
+	}
+	_, err = s.db.Exec(`
+		UPDATE events
+		SET name = ?, game = ?, city = ?, venue = ?, date = ?, format = ?, spots = ?,
+			host = ?, address = ?, notes = ?
+		WHERE id = ? AND owner_id = ? AND status = 'published'
+	`, evt.Name, evt.Game, evt.City, evt.Venue, evt.Date, evt.Format, evt.Spots,
+		evt.Host, evt.Address, evt.Notes, eventID, ownerID)
+	if err != nil {
+		return Event{}, err
+	}
+	return evt, nil
+}
+
+func (s *EventStore) Cancel(ownerID, eventID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var storedOwner sql.NullString
+	var status string
+	err := s.db.QueryRow("SELECT owner_id, status FROM events WHERE id = ?", eventID).Scan(&storedOwner, &status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrEventNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if !storedOwner.Valid || storedOwner.String != ownerID {
+		return ErrNotEventOwner
+	}
+	if status != "published" {
+		return ErrEventCancelled
+	}
+	_, err = s.db.Exec("UPDATE events SET status = 'cancelled' WHERE id = ? AND owner_id = ?", eventID, ownerID)
+	return err
 }
 
 // Handler exposes the HTTP routes for the app.
@@ -348,6 +474,15 @@ func (h *Handler) events(w http.ResponseWriter, r *http.Request) {
 			"count":  len(results),
 		})
 	case http.MethodPost:
+		session, ok := h.session(r)
+		if !ok {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authentication required"})
+			return
+		}
+		if !validCSRFToken(r, session.CSRFToken) {
+			writeJSON(w, http.StatusForbidden, map[string]any{"error": "invalid CSRF token"})
+			return
+		}
 		var event Event
 		if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid event payload"})
@@ -358,7 +493,7 @@ func (h *Handler) events(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 			return
 		}
-		stored, err := h.store.Add(event)
+		stored, err := h.store.Add(session.User.ID, event)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not create event"})
 			return
@@ -370,23 +505,79 @@ func (h *Handler) events(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) eventDetail(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
-		return
-	}
-
 	id := strings.TrimPrefix(r.URL.Path, "/events/")
 	if id == "" || strings.Contains(id, "/") {
 		h.notFound(w)
 		return
 	}
 
-	event, ok := h.store.Get(id)
-	if !ok {
-		h.notFound(w)
-		return
+	switch r.Method {
+	case http.MethodGet:
+		event, ok := h.store.Get(id)
+		if !ok {
+			h.notFound(w)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"event": event})
+	case http.MethodPut:
+		session, ok := h.session(r)
+		if !ok {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authentication required"})
+			return
+		}
+		if !validCSRFToken(r, session.CSRFToken) {
+			writeJSON(w, http.StatusForbidden, map[string]any{"error": "invalid CSRF token"})
+			return
+		}
+		var event Event
+		if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid event payload"})
+			return
+		}
+		updated, err := h.store.Update(session.User.ID, id, event)
+		if err != nil {
+			writeEventError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"event": updated})
+	case http.MethodDelete:
+		session, ok := h.session(r)
+		if !ok {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authentication required"})
+			return
+		}
+		if !validCSRFToken(r, session.CSRFToken) {
+			writeJSON(w, http.StatusForbidden, map[string]any{"error": "invalid CSRF token"})
+			return
+		}
+		if err := h.store.Cancel(session.User.ID, id); err != nil {
+			writeEventError(w, err)
+			return
+		}
+		event, ok := h.store.Get(id)
+		if !ok {
+			h.notFound(w)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"event": event})
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"event": event})
+}
+
+func writeEventError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, ErrInvalidEvent):
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+	case errors.Is(err, ErrEventNotFound):
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "resource not found"})
+	case errors.Is(err, ErrNotEventOwner):
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "event owner required"})
+	case errors.Is(err, ErrEventCancelled):
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "event is cancelled"})
+	default:
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not update event"})
+	}
 }
 
 func (h *Handler) notFound(w http.ResponseWriter) {
@@ -402,3 +593,8 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 }
 
 var ErrInvalidEvent = errors.New("invalid event")
+var (
+	ErrEventNotFound  = errors.New("event not found")
+	ErrNotEventOwner  = errors.New("not event owner")
+	ErrEventCancelled = errors.New("event is cancelled")
+)

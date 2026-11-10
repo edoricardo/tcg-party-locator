@@ -22,5 +22,8 @@
 /data/
 *.db
 
+# Local worktrees
+.worktrees/
+
 # macOS
 .DS_Store
